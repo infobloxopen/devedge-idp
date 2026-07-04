@@ -6,6 +6,7 @@ import (
 	"crypto/rsa"
 	"errors"
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 
@@ -36,6 +37,11 @@ type Storage struct {
 	tokens       map[string]*token
 	refreshers   map[string]*refreshToken
 	clients      map[string]*Client
+	// seedIDs are the client_ids of the compiled-in seeded clients.
+	// ReplaceFileClients preserves them so file-sourced clients only ever
+	// AUGMENT the seed — the seeded example client the acceptance tests rely on
+	// is never dropped by a clients-file edit.
+	seedIDs      map[string]struct{}
 	signingKey   signingKey
 	deviceCodes  map[string]*deviceEntry // deviceCode -> entry
 	userCodes    map[string]string       // userCode -> deviceCode
@@ -56,12 +62,17 @@ func NewStorage(clients map[string]*Client) (*Storage, error) {
 	if err != nil {
 		return nil, fmt.Errorf("generate signing key: %w", err)
 	}
+	seedIDs := make(map[string]struct{}, len(clients))
+	for id := range clients {
+		seedIDs[id] = struct{}{}
+	}
 	return &Storage{
 		authRequests: map[string]*authRequest{},
 		codes:        map[string]string{},
 		tokens:       map[string]*token{},
 		refreshers:   map[string]*refreshToken{},
 		clients:      clients,
+		seedIDs:      seedIDs,
 		signingKey: signingKey{
 			id:        uuid.NewString(),
 			algorithm: jose.RS256,
@@ -79,6 +90,44 @@ func (s *Storage) RegisterClient(c *Client) {
 	s.lock.Lock()
 	defer s.lock.Unlock()
 	s.clients[c.id] = c
+}
+
+// ReplaceFileClients re-registers the file-sourced client set, preserving the
+// seeded clients. Any previously file-registered client absent from cs is
+// removed, so editing idp-clients.json to drop a client drops its tile too;
+// seeded clients are never touched. It is the hot-reload apply step (see
+// WatchClientsFile).
+func (s *Storage) ReplaceFileClients(cs []*Client) {
+	s.lock.Lock()
+	defer s.lock.Unlock()
+	for id := range s.clients {
+		if _, seeded := s.seedIDs[id]; !seeded {
+			delete(s.clients, id)
+		}
+	}
+	for _, c := range cs {
+		s.clients[c.id] = c
+	}
+}
+
+// ClientTile pairs a registered client_id with its launchpad tile metadata.
+type ClientTile struct {
+	ClientID string `json:"client_id"`
+	Tile     Tile   `json:"tile"`
+}
+
+// ClientTiles returns the tile metadata for every registered client, sorted by
+// client_id for a stable launchpad. It reflects the live registry, so a
+// hot-reloaded client appears here the moment WatchClientsFile applies it.
+func (s *Storage) ClientTiles() []ClientTile {
+	s.lock.Lock()
+	defer s.lock.Unlock()
+	out := make([]ClientTile, 0, len(s.clients))
+	for id, c := range s.clients {
+		out = append(out, ClientTile{ClientID: id, Tile: c.tile})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ClientID < out[j].ClientID })
+	return out
 }
 
 // CompleteAuthRequest is the passwordless "login": it binds a chosen built-in

@@ -46,24 +46,34 @@ the login page claims the more specific `/login`). This dogfoods the SDK.
 
 ```sh
 go run ./cmd/idp
-# or with explicit addresses / a pinned issuer:
-IDP_HTTP_ADDR=:8080 IDP_GRPC_ADDR=:9090 IDP_ISSUER=http://idp.dev.test go run ./cmd/idp
+# or with explicit addresses / a pinned issuer / a hot-reloadable clients file:
+IDP_HTTP_ADDR=:8080 IDP_GRPC_ADDR=:9090 IDP_ISSUER=http://idp.dev.test \
+  IDP_CLIENTS=./idp-clients.json go run ./cmd/idp
 ```
 
-Flags mirror the env vars: `-http-addr`, `-grpc-addr`, `-issuer`. When `-issuer`
-is empty the issuer is derived per-request from the `Host` header (handy on
-ephemeral ports).
+Flags mirror the env vars: `-http-addr`, `-grpc-addr`, `-issuer`, `-clients`.
+When `-issuer` is empty the issuer is derived per-request from the `Host` header
+(handy on ephemeral ports). `-clients` is optional (see the client registry
+below); when unset only the seeded client is registered.
+
+Open `http://localhost:8080/` in a browser to see the launchpad.
 
 ### URLs served (on the HTTP port)
 
 | Path | Purpose |
 |------|---------|
+| `/` | launchpad (SSO session) or identity picker (no session) |
+| `/pick?identity=<sub>` | establish the IdP SSO session for a built-in identity |
+| `/logout` | clear the IdP SSO session (back to the picker) |
+| `/switch` | switch user (logout + pick another) |
+| `/launchpad.json` | the launchpad model (session, identities, tiles) as JSON |
+| `/ui/launchpad.js` | the launchpad frontend bundle (built on devedge-ufe-sdk) |
 | `/.well-known/openid-configuration` | OIDC discovery |
 | `/authorize` | authorization endpoint (auth-code + PKCE S256) |
 | `/oauth/token` | token endpoint (auth-code + refresh + device grants) |
 | `/keys` | JWKS (id_token signing public keys) |
 | `/device_authorization` | device grant (RFC 8628) |
-| `/login` | passwordless identity picker (interactive + headless) |
+| `/login` | passwordless identity picker mid-`/authorize` (interactive + headless) |
 | `/healthz`, `/readyz` | SDK liveness / readiness probes |
 
 ## Built-in identities (passwordless dev fixtures)
@@ -79,16 +89,66 @@ Edit them in one place: `internal/idp/identities.go` (`var Identities`).
 "Login" is picking one — no credential is checked. For automation, complete the
 flow headlessly: `GET /login?authRequestID=<id>&identity=alice`.
 
-## Seeded client (an "app identity")
+## Client registry (the "app identities")
 
-An in-memory confidential client, edit in `internal/idp/clients.go`:
+An in-memory confidential client is always seeded (edit in
+`internal/idp/clients.go`):
 
 - `client_id`: `devedge-idp-example`
 - `client_secret`: `dev-secret` (guessable, dev-only)
 - grants: authorization_code (PKCE), refresh_token, device_code
 
-Register more clients at runtime via `Storage.RegisterClient` — the seam the
-future `de idp clients sync` will use.
+### Hot-reloadable clients file
+
+Point `-clients` / `IDP_CLIENTS` at an `idp-clients.json` to register more
+clients. The file **augments** the seeded set (the seeded client always stays,
+so the acceptance tests keep working) and is **hot-reloaded**: the IdP polls the
+file's mtime every second and re-registers clients + refreshes the launchpad
+tiles on change — edit the file and a new app tile appears with **no restart**.
+A bad/parse-error edit keeps the last-good set (it never crashes the IdP). This
+is the file a sibling `de idp clients sync` writes. The exact shape (see the
+sample `idp-clients.json`):
+
+```json
+[
+  {
+    "client_id": "orders",
+    "client_secret": "dev-secret-orders",
+    "redirect_uris": ["https://orders.app.dev.test/callback"],
+    "tile": { "name": "Orders", "description": "", "icon_url": "", "launch_url": "https://orders.app.dev.test/" }
+  }
+]
+```
+
+The `tile` metadata drives the launchpad. Clients can also be registered
+programmatically via `Storage.RegisterClient` / `Storage.ReplaceFileClients`.
+
+## Launchpad + identity picker
+
+The IdP serves its own UI through the SDK `HTTPHandlers` mount seam:
+
+- **Identity picker** (`/` with no SSO session) — lists the built-in identities;
+  picking one (`/pick?identity=<sub>`) sets the IdP-owned SSO session cookie
+  (`idp_session`) and lands on the launchpad. Passwordless — no credential.
+- **App-tile launchpad** (`/` with an SSO session) — an Okta-style grid of one
+  tile per registered client (from the tile metadata); clicking a tile navigates
+  to its `launch_url`. **Log out** clears the session; **switch user** logs out
+  and returns to the picker.
+
+The frontend lives in `ui/` and is built on the **devedge-ufe-sdk** core: it
+adapts the IdP SSO session to the `@infobloxopen/devedge-ufe-core`
+`SessionProvider` seam (`ui/src/session.ts`) and drives logout / switch /
+tile-launch through that contract over the window-pinned auth-event bus. The
+pages are also server-rendered, so the flow works with no JavaScript and is
+assertable headlessly.
+
+Build the frontend (only needed after editing `ui/src`; the bundle is committed
+to `internal/idp/assets/`):
+
+```sh
+npm --prefix ui install
+npm --prefix ui run build   # esbuild → internal/idp/assets/launchpad.js
+```
 
 ## Dev authz service
 
@@ -170,6 +230,10 @@ curl -X POST http://127.0.0.1:8090/v1/authorize \
   `server.New(...).Serve` path and, with no browser, drives a full
   confidential-client **auth-code + PKCE** round-trip, then verifies the returned
   `id_token` against the served JWKS and asserts the coarse-claims rule.
+- `cmd/idp/launchpad_test.go` proves the **clients-file hot-reload** (boot with a
+  clients file → its client/tile is registered; edit to add a second → it appears
+  with no restart; a bad edit keeps last-good) and the **picker → launchpad →
+  logout** flow at the HTTP level (served content + SSO session cookie).
 - `e2e/twotier_test.go` proves the two-tier trust chain (IdP identity → app
   identity mints the bearer → microservice verifies the app's JWKS).
 - `e2e/verifydecide_test.go` proves the full **VERIFY→DECIDE** pipeline against a

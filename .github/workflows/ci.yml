@@ -19,3 +19,20 @@ jobs:
         run: go vet ./...
       - name: test
         run: go test ./...
+
+  ui-build:
+    # Verifies the launchpad frontend (built on devedge-ufe-sdk) still bundles.
+    # The bundle is committed under internal/idp/assets/, so this does NOT gate
+    # the Go build/test job above; it catches drift in ui/src.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.x'
+      - name: install
+        run: npm --prefix ui install --no-audit --no-fund
+      - name: typecheck
+        run: npm --prefix ui run typecheck
+      - name: build
+        run: npm --prefix ui run build

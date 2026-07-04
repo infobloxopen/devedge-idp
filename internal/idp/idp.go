@@ -14,6 +14,7 @@ package idp
 import (
 	"crypto/sha256"
 	"log/slog"
+	"net/http"
 	"time"
 
 	"golang.org/x/text/language"
@@ -57,9 +58,19 @@ func New(cfg Config) ([]server.HTTPHandler, *Storage, error) {
 		return nil, nil, err
 	}
 	login := newLoginHandler(storage, provider)
+	lp := newLaunchpad(storage)
+	// The OP claims the "/" catch-all; rootWithFallback carves the exact "/" home
+	// out for the launchpad and delegates all other paths (the OIDC endpoints) to
+	// the OP. The launchpad's other routes are mounted on their own more-specific
+	// patterns, which the SDK mux routes ahead of "/".
 	handlers := []server.HTTPHandler{
 		{Pattern: loginPath, Handler: login},
-		{Pattern: "/", Handler: provider},
+		{Pattern: "/launchpad.json", Handler: http.HandlerFunc(lp.data)},
+		{Pattern: "/pick", Handler: http.HandlerFunc(lp.pick)},
+		{Pattern: "/logout", Handler: http.HandlerFunc(lp.logout)},
+		{Pattern: "/switch", Handler: http.HandlerFunc(lp.switchUser)},
+		{Pattern: "/ui/", Handler: lp.assetsHandler()},
+		{Pattern: "/", Handler: lp.rootWithFallback(provider)},
 	}
 	return handlers, storage, nil
 }

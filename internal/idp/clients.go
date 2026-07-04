@@ -11,6 +11,18 @@ import (
 // passwordless login handler (login.go) serves it.
 const loginPath = "/login"
 
+// Tile is the launchpad presentation metadata for a client (app). It drives the
+// Okta-style app-tile launchpad (login.go / launchpad.go): one tile per
+// registered client. It is purely cosmetic and dev-only — it authorizes
+// nothing. The JSON tags match the syncable idp-clients.json contract that a
+// sibling `de idp clients sync` writes.
+type Tile struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	IconURL     string `json:"icon_url"`
+	LaunchURL   string `json:"launch_url"`
+}
+
 // Client is the storage model of a confidential OAuth2 client — an "app
 // identity" in the WS-026 model. For P0 these are dev fixtures with guessable
 // secrets; that is intended (dev-only). It implements op.Client.
@@ -20,12 +32,16 @@ type Client struct {
 	redirectURIs []string
 	grantTypes   []oidc.GrantType
 	authMethod   oidc.AuthMethod
+	tile         Tile
 }
 
 var _ op.Client = (*Client)(nil)
 
 // GetID returns the client_id.
 func (c *Client) GetID() string { return c.id }
+
+// Tile returns the launchpad presentation metadata for this client.
+func (c *Client) Tile() Tile { return c.tile }
 
 // RedirectURIs returns the registered redirect_uris for the code flow.
 func (c *Client) RedirectURIs() []string { return c.redirectURIs }
@@ -113,6 +129,10 @@ func seedClients(redirectURIs ...string) map[string]*Client {
 				oidc.GrantTypeCode,
 				oidc.GrantTypeRefreshToken,
 				oidc.GrantTypeDeviceCode,
+			},
+			tile: Tile{
+				Name:        "devedge IdP Example",
+				Description: "The seeded example app identity.",
 			},
 		},
 	}

@@ -1,0 +1,19 @@
+{
+  "name": "devedge-idp-launchpad",
+  "version": "0.1.0",
+  "private": true,
+  "description": "The devedge-idp launchpad + identity-picker frontend, built on the devedge-ufe-sdk core. Bundles to internal/idp/assets/launchpad.js, which the IdP serves through the SDK HTTPHandlers mount seam.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "scripts": {
+    "build": "esbuild src/launchpad.ts --bundle --format=esm --minify --sourcemap --outfile=../internal/idp/assets/launchpad.js",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@infobloxopen/devedge-ufe-core": "file:./vendor/devedge-ufe-core"
+  },
+  "devDependencies": {
+    "esbuild": "^0.24.0",
+    "typescript": "^5.4.0"
+  }
+}
