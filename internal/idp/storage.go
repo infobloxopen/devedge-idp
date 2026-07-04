@@ -430,8 +430,44 @@ func (s *Storage) setCoarseUserinfo(info *oidc.UserInfo, subject string, scopes 
 	// The app-access entitlement is core to the identity assertion, so it is
 	// emitted regardless of the profile/email scopes. It is the only
 	// authorization-shaped claim the IdP asserts.
-	info.AppendClaims(appsClaim, append([]string(nil), id.Apps...))
+	//
+	// Dev entitlement (finding 096): a built-in dev identity may enter EVERY app
+	// registered in this dev IdP — its own declared Apps unioned with every
+	// registered client_id (seeded + hot-reloaded from idp-clients.json). So an app
+	// added via `de idp clients sync` is immediately usable, including with
+	// authn.WithRequireEntitlement(), without hand-editing this file. This is a
+	// deliberate dev convenience (passwordless, entitle-all); a real IdP authors
+	// per-identity app-access from a directory.
+	info.AppendClaims(appsClaim, unionSorted(id.Apps, s.allClientIDs()))
 	return nil
+}
+
+// allClientIDs returns every registered client_id (seeded + file-sourced),
+// sorted. Used to make a dev identity entitled to every registered app.
+func (s *Storage) allClientIDs() []string {
+	s.lock.Lock()
+	defer s.lock.Unlock()
+	ids := make([]string, 0, len(s.clients))
+	for id := range s.clients {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	return ids
+}
+
+// unionSorted returns the sorted, de-duplicated union of a and b.
+func unionSorted(a, b []string) []string {
+	seen := make(map[string]struct{}, len(a)+len(b))
+	out := make([]string, 0, len(a)+len(b))
+	for _, s := range append(append([]string(nil), a...), b...) {
+		if _, ok := seen[s]; ok {
+			continue
+		}
+		seen[s] = struct{}{}
+		out = append(out, s)
+	}
+	sort.Strings(out)
+	return out
 }
 
 func (s *Storage) SetUserinfoFromRequest(_ context.Context, info *oidc.UserInfo, req op.IDTokenRequest, scopes []string) error {

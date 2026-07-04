@@ -23,15 +23,18 @@ func main() {
 	issuer := flag.String("issuer", env("IDP_ISSUER", ""), "OIDC issuer URL; empty derives it per-request from the Host header")
 	clientsPath := flag.String("clients", env("IDP_CLIENTS", ""),
 		"path to idp-clients.json to load and hot-reload; augments the seeded client, last-good kept on a bad edit")
+	exampleRedirect := flag.String("example-redirect-uri", env("IDP_EXAMPLE_REDIRECT_URI", ""),
+		"redirect_uri for the seeded example client; set this to complete a real browser OAuth round-trip against devedge-idp-example (default is a headless-only placeholder)")
 	flag.Parse()
 
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	slog.SetDefault(logger)
 
-	handlers, storage, err := idp.New(idp.Config{
-		Issuer: *issuer,
-		Logger: logger,
-	})
+	cfg := idp.Config{Issuer: *issuer, Logger: logger}
+	if *exampleRedirect != "" {
+		cfg.RedirectURIs = []string{*exampleRedirect}
+	}
+	handlers, storage, err := idp.New(cfg)
 	if err != nil {
 		logger.Error("build idp", "err", err)
 		os.Exit(1)
