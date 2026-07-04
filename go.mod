@@ -5,8 +5,8 @@ go 1.25.5
 require (
 	github.com/go-jose/go-jose/v4 v4.1.4
 	github.com/google/uuid v1.6.0
-	github.com/infobloxopen/devedge-sdk v0.52.0
-	github.com/infobloxopen/devedge-sdk/authn/oidc v0.0.0-00010101000000-000000000000
+	github.com/infobloxopen/devedge-sdk v0.53.0
+	github.com/infobloxopen/devedge-sdk/authn/oidc v0.53.0
 	github.com/zitadel/oidc/v3 v3.47.5
 	golang.org/x/oauth2 v0.36.0
 	golang.org/x/text v0.37.0
@@ -42,7 +42,3 @@ require (
 	google.golang.org/genproto/googleapis/api v0.0.0-20260526163538-3dc84a4a5aaa // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260526163538-3dc84a4a5aaa // indirect
 )
-
-replace github.com/infobloxopen/devedge-sdk => /Users/dgarcia/go/src/github.com/infobloxopen/devedge-sdk
-
-replace github.com/infobloxopen/devedge-sdk/authn/oidc => /Users/dgarcia/go/src/github.com/infobloxopen/devedge-sdk/authn/oidc
