@@ -1,0 +1,14 @@
+# devedge routing for the dev IdP (host-only). `de` wires idp.dev.test to the
+# IdP's HTTP port on the shared dev cluster; the orchestrator applies this.
+apiVersion: devedge.infoblox.com/v1
+kind: Service
+metadata:
+  name: devedge-idp
+spec:
+  # The IdP serves OIDC endpoints (discovery, authorize, token, keys, device)
+  # and the passwordless login page over HTTP.
+  http:
+    host: idp.dev.test
+    port: 8080
+  grpc:
+    port: 9090
