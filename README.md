@@ -1,11 +1,23 @@
 # devedge-idp
 
-A **development-only OpenID Provider (OIDC)** for the devedge ecosystem. It is
-the keystone (P0) of the WS-026 dev security suite.
+The **dev security suite** for the devedge ecosystem (WS-026), built on
+devedge-sdk. It has two halves behind two SDK seams:
 
-> **NON-PRODUCTION.** Passwordless login, guessable dummy client secrets, and
-> in-memory state that resets on restart. Never deploy this outside a
-> development environment.
+- **Identity** — a development-only **OpenID Provider** (`cmd/idp`): who you are.
+  It authenticates passwordlessly and issues a signed identity assertion.
+- **Decisions** — a development-only **dev authz service** (`cmd/devauthz`): what
+  you may do. It answers `POST /v1/authorize` behind the `authz.Authorizer` seam
+  and its grants are manipulable **live** — edit a file or `PUT` new grants and a
+  decision flips with no restart.
+
+A microservice built on devedge-sdk wires the IdP-derived bearer into its
+`Authenticator` (verify) and the dev authz service into its `Authorizer`
+(decide); `e2e/verifydecide_test.go` proves the full VERIFY→DECIDE pipeline
+headlessly, including a live grant flip.
+
+> **NON-PRODUCTION.** Passwordless login, guessable dummy client secrets,
+> unauthenticated admin endpoints, and in-memory state that resets on restart.
+> Never deploy either binary outside a development environment.
 
 ## The two-tier token model
 
@@ -78,12 +90,92 @@ An in-memory confidential client, edit in `internal/idp/clients.go`:
 Register more clients at runtime via `Storage.RegisterClient` — the seam the
 future `de idp clients sync` will use.
 
-## Acceptance test
+## Dev authz service
 
-`cmd/idp/acceptance_test.go` boots the IdP through the real
-`server.New(...).Serve` path and, with no browser, drives a full
-confidential-client **auth-code + PKCE** round-trip, then verifies the returned
-`id_token` against the served JWKS and asserts the coarse-claims rule.
+`cmd/devauthz` is the decisions half of the suite: the out-of-process,
+hot-reloadable sibling of the SDK's in-process `authz.DevAuthorizer`. It runs on
+the same devedge-sdk server harness and serves the dev authz wire protocol so a
+microservice's `authz.Authorizer` can be a live, editable service instead of a
+compiled-in rule set.
+
+> **NON-PRODUCTION.** The admin endpoint is **unauthenticated** and grants are
+> in-memory / file-backed. Production authorization is OPA/PARGS behind the
+> **same** `authz.Authorizer` seam: a service swaps `Authorizer:
+> &devsvc.Client{...}` for `Authorizer: opaauthz.New(...)` with no other code
+> change.
+
+### Run it
+
+```sh
+go run ./cmd/devauthz
+# or with explicit addresses / a grants file:
+DEVAUTHZ_HTTP_ADDR=:8090 DEVAUTHZ_GRPC_ADDR=:9091 DEVAUTHZ_GRANTS=./grants.json go run ./cmd/devauthz
+```
+
+Flags mirror the env vars: `-http-addr` (default `:8090`), `-grpc-addr` (default
+`:9091`; the harness requires one even though this service is HTTP-only), and
+`-grants` (default `./grants.json`). When the grants file is absent the service
+starts **empty = default-deny** — the admin `PUT` still works.
+
+### Endpoints served (on the HTTP port)
+
+| Path | Method | Purpose |
+|------|--------|---------|
+| `/v1/authorize` | `POST` | decide one request (body: principal + verb + resource); returns `{"allow":bool,"reason":...}` |
+| `/v1/grants` | `PUT` | replace the whole grant set live (body: JSON array of grants) |
+| `/healthz`, `/readyz` | `GET` | SDK liveness / readiness probes (always win over `/v1/`) |
+
+### Grants file
+
+`grants.json` is a JSON array of grants (see the shipped sample). Each grant is
+`{Tenant, Subjects, Verbs, Resource}`; `*` is a wildcard, and group membership is
+matched as `group:<name>`:
+
+```json
+[
+  {"Tenant": "*", "Subjects": ["group:admin"],  "Verbs": ["*"],          "Resource": "*"},
+  {"Tenant": "*", "Subjects": ["group:viewer"], "Verbs": ["get","list"], "Resource": "order"}
+]
+```
+
+### Flip a grant live (no restart)
+
+Two ways, both hot:
+
+**Edit the file** — the service polls its mtime every second and reloads
+(keeping the last-good set on a bad edit):
+
+```sh
+# grant group:viewer delete on order, then save — the next decision reflects it
+$EDITOR grants.json
+```
+
+**Or `PUT` a new set over the wire:**
+
+```sh
+curl -X PUT http://127.0.0.1:8090/v1/grants \
+  -H 'Content-Type: application/json' \
+  -d '[{"Tenant":"*","Subjects":["group:ops"],"Verbs":["delete"],"Resource":"order"}]'
+
+# ask a decision:
+curl -X POST http://127.0.0.1:8090/v1/authorize \
+  -H 'Content-Type: application/json' \
+  -d '{"principal":{"Subject":"opsuser","Groups":["ops"]},"verb":"delete","resource":{"Type":"order"}}'
+# -> {"allow":true,"reason":"dev grant matched"}
+```
+
+## Acceptance tests
+
+- `cmd/idp/acceptance_test.go` boots the IdP through the real
+  `server.New(...).Serve` path and, with no browser, drives a full
+  confidential-client **auth-code + PKCE** round-trip, then verifies the returned
+  `id_token` against the served JWKS and asserts the coarse-claims rule.
+- `e2e/twotier_test.go` proves the two-tier trust chain (IdP identity → app
+  identity mints the bearer → microservice verifies the app's JWKS).
+- `e2e/verifydecide_test.go` proves the full **VERIFY→DECIDE** pipeline against a
+  live dev authz service: a verified bearer is **denied** (empty grants), then
+  the SAME call is **allowed** after a live grant flip, and a garbage bearer is
+  rejected at verify before authz is consulted.
 
 ```sh
 go build ./... && go test ./...

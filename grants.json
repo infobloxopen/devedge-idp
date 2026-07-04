@@ -1,0 +1,4 @@
+[
+  {"Tenant": "*", "Subjects": ["group:admin"], "Verbs": ["*"], "Resource": "*"},
+  {"Tenant": "*", "Subjects": ["group:viewer"], "Verbs": ["get", "list"], "Resource": "order"}
+]
