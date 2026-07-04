@@ -13,10 +13,9 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: '1.25.x'
-      # NOTE: the go.mod `replace` points devedge-sdk at a local working tree.
-      # CI must provide that module (checkout alongside, or drop the replace once
-      # the HTTPHandlers seam is released) or the build will fail to resolve it.
       - name: build
         run: go build ./...
+      - name: vet
+        run: go vet ./...
       - name: test
         run: go test ./...
