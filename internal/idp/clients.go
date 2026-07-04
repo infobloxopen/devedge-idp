@@ -14,13 +14,13 @@ const loginPath = "/login"
 // Tile is the launchpad presentation metadata for a client (app). It drives the
 // Okta-style app-tile launchpad (login.go / launchpad.go): one tile per
 // registered client. It is purely cosmetic and dev-only — it authorizes
-// nothing. The JSON tags match the syncable idp-clients.json contract that a
-// sibling `de idp clients sync` writes.
+// nothing. The tags match the syncable idp-clients.yaml contract that a sibling
+// `de idp clients sync` writes (identical keys in YAML and JSON).
 type Tile struct {
-	Name        string `json:"name"`
-	Description string `json:"description"`
-	IconURL     string `json:"icon_url"`
-	LaunchURL   string `json:"launch_url"`
+	Name        string `json:"name" yaml:"name"`
+	Description string `json:"description" yaml:"description"`
+	IconURL     string `json:"icon_url" yaml:"icon_url"`
+	LaunchURL   string `json:"launch_url" yaml:"launch_url"`
 }
 
 // Client is the storage model of a confidential OAuth2 client — an "app

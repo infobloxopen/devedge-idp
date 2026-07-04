@@ -48,7 +48,7 @@ the login page claims the more specific `/login`). This dogfoods the SDK.
 go run ./cmd/idp
 # or with explicit addresses / a pinned issuer / a hot-reloadable clients file:
 IDP_HTTP_ADDR=:8080 IDP_GRPC_ADDR=:9090 IDP_ISSUER=http://idp.dev.test \
-  IDP_CLIENTS=./idp-clients.json go run ./cmd/idp
+  IDP_CLIENTS=./idp-clients.yaml go run ./cmd/idp
 ```
 
 Flags mirror the env vars: `-http-addr`, `-grpc-addr`, `-issuer`, `-clients`.
@@ -108,24 +108,34 @@ An in-memory confidential client is always seeded (edit in
 
 ### Hot-reloadable clients file
 
-Point `-clients` / `IDP_CLIENTS` at an `idp-clients.json` to register more
+Point `-clients` / `IDP_CLIENTS` at an `idp-clients.yaml` to register more
 clients. The file **augments** the seeded set (the seeded client always stays,
 so the acceptance tests keep working) and is **hot-reloaded**: the IdP polls the
 file's mtime every second and re-registers clients + refreshes the launchpad
 tiles on change — edit the file and a new app tile appears with **no restart**.
 A bad/parse-error edit keeps the last-good set (it never crashes the IdP). This
-is the file a sibling `de idp clients sync` writes. The exact shape (see the
-sample `idp-clients.json`):
+is the file a sibling `de idp clients sync` writes.
 
-```json
-[
-  {
-    "client_id": "orders",
-    "client_secret": "dev-secret-orders",
-    "redirect_uris": ["https://orders.app.dev.test/callback"],
-    "tile": { "name": "Orders", "description": "", "icon_url": "", "launch_url": "https://orders.app.dev.test/" }
-  }
-]
+The file is **YAML** (a `.json` file with the same keys is also accepted — YAML
+is a superset of JSON). Schema — a list of clients, each:
+
+| Key | Type | Meaning |
+|-----|------|---------|
+| `client_id` | string (required) | the OAuth2 client id (the app name); an empty id is rejected |
+| `client_secret` | string | the confidential-client secret (a guessable dev dummy) |
+| `redirect_uris` | list of string | allowed redirect URIs (the app's BFF callback) |
+| `tile` | mapping | launchpad tile: `name`, `description`, `icon_url`, `launch_url` (all optional) |
+
+```yaml
+- client_id: orders
+  client_secret: dev-secret-orders
+  redirect_uris:
+    - https://orders.app.dev.test/callback
+  tile:
+    name: Orders
+    description: ""
+    icon_url: ""
+    launch_url: https://orders.app.dev.test/
 ```
 
 The `tile` metadata drives the launchpad. Clients can also be registered
@@ -229,12 +239,12 @@ compiled-in rule set.
 ```sh
 go run ./cmd/devauthz
 # or with explicit addresses / a grants file:
-DEVAUTHZ_HTTP_ADDR=:8090 DEVAUTHZ_GRPC_ADDR=:9091 DEVAUTHZ_GRANTS=./grants.json go run ./cmd/devauthz
+DEVAUTHZ_HTTP_ADDR=:8090 DEVAUTHZ_GRPC_ADDR=:9091 DEVAUTHZ_GRANTS=./grants.yaml go run ./cmd/devauthz
 ```
 
 Flags mirror the env vars: `-http-addr` (default `:8090`), `-grpc-addr` (default
 `:9091`; the harness requires one even though this service is HTTP-only), and
-`-grants` (default `./grants.json`). When the grants file is absent the service
+`-grants` (default `./grants.yaml`). When the grants file is absent the service
 starts **empty = default-deny** — the admin `PUT` still works.
 
 ### Endpoints served (on the HTTP port)
@@ -242,20 +252,32 @@ starts **empty = default-deny** — the admin `PUT` still works.
 | Path | Method | Purpose |
 |------|--------|---------|
 | `/v1/authorize` | `POST` | decide one request (body: principal + verb + resource); returns `{"allow":bool,"reason":...}` |
-| `/v1/grants` | `PUT` | replace the whole grant set live (body: JSON array of grants) |
+| `/v1/grants` | `PUT` | replace the whole grant set live (body: a JSON list of grants — same keys as the file) |
 | `/healthz`, `/readyz` | `GET` | SDK liveness / readiness probes (always win over `/v1/`) |
 
 ### Grants file
 
-`grants.json` is a JSON array of grants (see the shipped sample). Each grant is
-`{Tenant, Subjects, Verbs, Resource}`; `*` is a wildcard, and group membership is
+`grants.yaml` is a **YAML** list of grants (a `.json` file with the same keys is
+also accepted — YAML is a superset of JSON). Each grant has lowercase snake_case
+keys (defined by `authz.Grant`'s tags); `*` is a wildcard, and group membership is
 matched as `group:<name>`:
 
-```json
-[
-  {"Tenant": "*", "Subjects": ["group:admin"],  "Verbs": ["*"],          "Resource": "*"},
-  {"Tenant": "*", "Subjects": ["group:viewer"], "Verbs": ["get","list"], "Resource": "order"}
-]
+| Key | Type | Meaning |
+|-----|------|---------|
+| `tenant` | string | tenant this grant applies in; `*` = any |
+| `subjects` | list of string | who it grants to: a subject, `*`, or `group:<name>` |
+| `verbs` | list of string | permitted verbs (`get`/`list`/`create`/…); `*` = any |
+| `resource` | string | resource type; `*` = any |
+
+```yaml
+- tenant: "*"
+  subjects: [group:admin]
+  verbs: ["*"]
+  resource: "*"
+- tenant: "*"
+  subjects: [group:viewer]
+  verbs: [get, list]
+  resource: order
 ```
 
 ### Flip a grant live (no restart)
@@ -267,7 +289,7 @@ Two ways, both hot:
 
 ```sh
 # grant group:viewer delete on order, then save — the next decision reflects it
-$EDITOR grants.json
+$EDITOR grants.yaml
 ```
 
 **Or `PUT` a new set over the wire:**
@@ -275,7 +297,7 @@ $EDITOR grants.json
 ```sh
 curl -X PUT http://127.0.0.1:8090/v1/grants \
   -H 'Content-Type: application/json' \
-  -d '[{"Tenant":"*","Subjects":["group:ops"],"Verbs":["delete"],"Resource":"order"}]'
+  -d '[{"tenant":"*","subjects":["group:ops"],"verbs":["delete"],"resource":"order"}]'
 
 # ask a decision:
 curl -X POST http://127.0.0.1:8090/v1/authorize \

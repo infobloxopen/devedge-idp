@@ -31,7 +31,7 @@ func main() {
 		"gRPC listen address (the harness requires one; no gRPC services are registered — this service is HTTP-only)")
 	httpAddr := flag.String("http-addr", env("DEVAUTHZ_HTTP_ADDR", ":8090"),
 		"HTTP listen address (serves /v1/authorize and, admin-on, /v1/grants)")
-	grantsPath := flag.String("grants", env("DEVAUTHZ_GRANTS", "./grants.json"),
+	grantsPath := flag.String("grants", env("DEVAUTHZ_GRANTS", "./grants.yaml"),
 		"path to a JSON grants file to load and hot-reload; if it does not exist, start empty (default-deny)")
 	flag.Parse()
 

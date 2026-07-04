@@ -5,13 +5,14 @@ go 1.25.5
 require (
 	github.com/go-jose/go-jose/v4 v4.1.4
 	github.com/google/uuid v1.6.0
-	github.com/infobloxopen/devedge-sdk v0.53.0
-	github.com/infobloxopen/devedge-sdk/authn/oidc v0.53.0
+	github.com/infobloxopen/devedge-sdk v0.54.0
+	github.com/infobloxopen/devedge-sdk/authn/oidc v0.54.0
 	github.com/zitadel/oidc/v3 v3.47.5
 	golang.org/x/oauth2 v0.36.0
 	golang.org/x/text v0.37.0
 	google.golang.org/grpc v1.81.1
 	google.golang.org/protobuf v1.36.11
+	gopkg.in/yaml.v3 v3.0.1
 )
 
 require (

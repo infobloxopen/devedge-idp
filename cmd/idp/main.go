@@ -22,7 +22,7 @@ func main() {
 	httpAddr := flag.String("http-addr", env("IDP_HTTP_ADDR", ":8080"), "HTTP listen address (OIDC endpoints + login + launchpad)")
 	issuer := flag.String("issuer", env("IDP_ISSUER", ""), "OIDC issuer URL; empty derives it per-request from the Host header")
 	clientsPath := flag.String("clients", env("IDP_CLIENTS", ""),
-		"path to idp-clients.json to load and hot-reload; augments the seeded client, last-good kept on a bad edit")
+		"path to idp-clients.yaml (or .json) to load and hot-reload; augments the seeded client, last-good kept on a bad edit")
 	exampleRedirect := flag.String("example-redirect-uri", env("IDP_EXAMPLE_REDIRECT_URI", ""),
 		"redirect_uri for the seeded example client; set this to complete a real browser OAuth round-trip against devedge-idp-example (default is a headless-only placeholder)")
 	flag.Parse()

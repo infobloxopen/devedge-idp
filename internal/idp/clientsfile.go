@@ -2,45 +2,47 @@ package idp
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
 	"time"
 
 	"github.com/zitadel/oidc/v3/pkg/oidc"
+	"gopkg.in/yaml.v3"
 )
 
-// fileClient is the on-disk shape of a client in idp-clients.json — the
+// fileClient is the on-disk shape of a client in idp-clients.yaml — the
 // dev-manipulable, syncable client registry a sibling `de idp clients sync`
-// WRITES. The IdP READS exactly this shape.
+// WRITES. The IdP READS exactly this shape. The file is YAML (friendlier to
+// hand-edit); a .json file with the same keys is also accepted (YAML ⊇ JSON).
 //
-//	[
-//	  {
-//	    "client_id": "orders",
-//	    "client_secret": "dev-secret-orders",
-//	    "redirect_uris": ["https://orders.app.dev.test/callback"],
-//	    "tile": { "name": "Orders", "description": "", "icon_url": "", "launch_url": "https://orders.app.dev.test/" }
-//	  }
-//	]
+//	- client_id: orders
+//	  client_secret: dev-secret-orders
+//	  redirect_uris: [https://orders.app.dev.test/callback]
+//	  tile:
+//	    name: Orders
+//	    description: ""
+//	    icon_url: ""
+//	    launch_url: https://orders.app.dev.test/
 type fileClient struct {
-	ClientID     string   `json:"client_id"`
-	ClientSecret string   `json:"client_secret"`
-	RedirectURIs []string `json:"redirect_uris"`
-	Tile         Tile     `json:"tile"`
+	ClientID     string   `json:"client_id" yaml:"client_id"`
+	ClientSecret string   `json:"client_secret" yaml:"client_secret"`
+	RedirectURIs []string `json:"redirect_uris" yaml:"redirect_uris"`
+	Tile         Tile     `json:"tile" yaml:"tile"`
 }
 
-// LoadClientsFile reads idp-clients.json and builds the confidential clients it
-// declares. Each file client is a dev fixture that supports the same grants as
-// the seeded example (auth-code + PKCE, refresh, device) and authenticates with
-// client_secret_basic. A client with an empty client_id is rejected — a broken
-// file must not silently register a nameless client.
+// LoadClientsFile reads idp-clients.yaml (or a .json file with the same keys) and
+// builds the confidential clients it declares. Each file client is a dev fixture
+// that supports the same grants as the seeded example (auth-code + PKCE, refresh,
+// device) and authenticates with client_secret_basic. A client with an empty
+// client_id is rejected — a broken file must not silently register a nameless
+// client.
 func LoadClientsFile(path string) ([]*Client, error) {
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("idp: read clients file %q: %w", path, err)
 	}
 	var fcs []fileClient
-	if err := json.Unmarshal(b, &fcs); err != nil {
+	if err := yaml.Unmarshal(b, &fcs); err != nil {
 		return nil, fmt.Errorf("idp: parse clients file %q: %w", path, err)
 	}
 	clients := make([]*Client, 0, len(fcs))

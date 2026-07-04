@@ -1,0 +1,13 @@
+# grants.yaml — the dev-manipulable, hot-reloaded authz grants for cmd/devauthz.
+# A YAML list of grants (authz.Grant): the listed subjects may perform the listed
+# verbs on the resource within the tenant. Wildcards: tenant/resource may be "*";
+# verbs may contain "*"; subjects may be "*" or "group:<name>". Edit and it
+# hot-reloads (polled), or PUT /v1/grants. A .json file with the same keys works too.
+- tenant: tenant-a
+  subjects: [group:admin]
+  verbs: ["*"]
+  resource: "*"
+- tenant: "*"
+  subjects: [group:viewer]
+  verbs: [get, list]
+  resource: order

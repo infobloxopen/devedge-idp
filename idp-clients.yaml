@@ -1,0 +1,13 @@
+# idp-clients.yaml — the dev-manipulable, hot-reloaded IdP client/tile registry.
+# `de idp clients sync` writes this file; the IdP reads it (IDP_CLIENTS) and
+# augments the seeded client. Edit it and the launchpad tiles hot-reload, no
+# restart. A .json file with the same keys is also accepted (YAML is a superset).
+- client_id: vaultd
+  client_secret: dev-secret-vaultd
+  redirect_uris:
+    - https://app.dev.test/callback
+  tile:
+    name: Vaultd
+    description: Secrets vault microservice (WS-026 dogfood, run 20)
+    icon_url: ""
+    launch_url: https://app.dev.test/
