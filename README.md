@@ -131,6 +131,58 @@ sample `idp-clients.json`):
 The `tile` metadata drives the launchpad. Clients can also be registered
 programmatically via `Storage.RegisterClient` / `Storage.ReplaceFileClients`.
 
+## Driving the login flow without a browser
+
+An app identity or an automated test drives the whole login flow over plain
+HTTP — no browser, no user typing a password. The IdP is passwordless, so
+"login" is a `GET` that names a built-in identity (`alice`, `bob`, `carol`).
+Use a non-redirect HTTP client so you can read each `Location` yourself.
+
+**Auth-code + PKCE (the confidential-client / app-identity path).** Given the
+seeded client (`devedge-idp-example` / `dev-secret`, or any registered client):
+
+1. **Start the authorization request.** `GET /authorize` with the PKCE `S256`
+   challenge — `code_challenge = base64url(sha256(code_verifier))`,
+   `code_challenge_method=S256` — plus `response_type=code`, `client_id`,
+   `redirect_uri`, `scope=openid profile email`, and a random `state`. It
+   redirects to `/login?authRequestID=<id>` (read `authRequestID` off the
+   `Location`).
+2. **Pick a dev identity passwordlessly.** `GET /login?authRequestID=<id>&identity=alice`.
+   This is the headless analogue of clicking a face in the picker. It redirects
+   to the OP's internal callback.
+3. **Follow the callback redirect** to `redirect_uri?code=<code>&state=<state>`
+   and read `code`.
+4. **Exchange the code for tokens.** `POST /oauth/token` (form-encoded)
+   `grant_type=authorization_code`, `code`, `redirect_uri`, and `code_verifier`,
+   authenticating the confidential client with HTTP Basic
+   (`client_id:client_secret`). The response's `id_token` is the coarse identity
+   assertion.
+
+```sh
+# The S256 challenge for a given verifier:
+code_verifier=$(head -c 32 /dev/urandom | basenc --base64url | tr -d '=')
+code_challenge=$(printf %s "$code_verifier" | openssl dgst -binary -sha256 | basenc --base64url | tr -d '=')
+```
+
+**Device grant (RFC 8628, the CLI path).** A headless CLI has no redirect URI, so
+it approves through `/login` instead:
+
+1. **Request codes.** `POST /device_authorization` (form: `client_id`,
+   `scope=openid profile email`; Basic auth for the confidential client) →
+   `device_code`, `user_code`, and a `verification_uri` pointing at `/login`.
+2. **Poll before approval** — `POST /oauth/token`
+   (`grant_type=urn:ietf:params:oauth:grant-type:device_code`, `device_code`) —
+   and the OP answers `authorization_pending` until the device is approved.
+3. **Approve headlessly.** `GET /login?user_code=<code>&identity=alice` — the
+   passwordless analogue of typing the code shown on the device and picking
+   yourself. Omit `identity` to get an interactive picker for the code.
+4. **Poll again** and receive the `id_token`.
+
+The runnable reference for both recipes — including the exact query parameters,
+the confidential-client Basic auth, and the `authorization_pending` poll — is
+`e2e/twotier_test.go` (auth-code + PKCE) and `e2e/cli_devicegrant_test.go`
+(device grant).
+
 ## Launchpad + identity picker
 
 The IdP serves its own UI through the SDK `HTTPHandlers` mount seam:
