@@ -141,6 +141,12 @@ is a superset of JSON). Schema — a list of clients, each:
 The `tile` metadata drives the launchpad. Clients can also be registered
 programmatically via `Storage.RegisterClient` / `Storage.ReplaceFileClients`.
 
+`idp-clients.yaml` can contain plaintext `client_secret` values, so treat it
+like any other secret-bearing file: `chmod 0600 idp-clients.yaml` and keep it
+out of version control. The IdP only reads this file (`os.ReadFile`) — it
+never writes it, so permissions are the operator's/generator's responsibility,
+not something the IdP enforces at runtime.
+
 ## Driving the login flow without a browser
 
 An app identity or an automated test drives the whole login flow over plain

@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/subtle"
 	"errors"
 	"fmt"
 	"sort"
@@ -199,8 +200,9 @@ func (s *Storage) AuthorizeClientIDSecret(_ context.Context, clientID, clientSec
 	if !ok {
 		return fmt.Errorf("client %q not found", clientID)
 	}
-	// Dev-only: plain comparison. A real IdP stores a hash.
-	if c.secret != clientSecret {
+	// Dev-only: constant-time comparison against a stored plaintext secret. A
+	// real IdP stores (and compares against) a hash, not a plaintext value.
+	if subtle.ConstantTimeCompare([]byte(c.secret), []byte(clientSecret)) != 1 {
 		return errors.New("invalid client secret")
 	}
 	return nil
