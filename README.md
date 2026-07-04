@@ -73,7 +73,7 @@ Open `http://localhost:8080/` in a browser to see the launchpad.
 | `/oauth/token` | token endpoint (auth-code + refresh + device grants) |
 | `/keys` | JWKS (id_token signing public keys) |
 | `/device_authorization` | device grant (RFC 8628) |
-| `/login` | passwordless identity picker mid-`/authorize` (interactive + headless) |
+| `/login` | passwordless identity picker mid-`/authorize`, and the device-grant approval step (`user_code`); interactive + headless |
 | `/healthz`, `/readyz` | SDK liveness / readiness probes |
 
 ## Built-in identities (passwordless dev fixtures)
@@ -88,6 +88,14 @@ Edit them in one place: `internal/idp/identities.go` (`var Identities`).
 
 "Login" is picking one — no credential is checked. For automation, complete the
 flow headlessly: `GET /login?authRequestID=<id>&identity=alice`.
+
+For the **device grant** (RFC 8628, the CLI front door), the OP points a device
+flow's `verification_uri` at this same `/login` path. Approve a device headlessly
+with `GET /login?user_code=<code>&identity=alice` — the dev, passwordless
+analogue of a human typing the code shown on the device and picking themselves.
+Omit `identity` to get an interactive picker for the code. A CLI then polls
+`/oauth/token` (`grant_type=urn:ietf:params:oauth:grant-type:device_code`) and
+receives the `id_token`.
 
 ## Client registry (the "app identities")
 
@@ -236,6 +244,11 @@ curl -X POST http://127.0.0.1:8090/v1/authorize \
   logout** flow at the HTTP level (served content + SSO session cookie).
 - `e2e/twotier_test.go` proves the two-tier trust chain (IdP identity → app
   identity mints the bearer → microservice verifies the app's JWKS).
+- `e2e/cli_devicegrant_test.go` proves the **CLI consumer path**: a headless
+  RFC 8628 device grant (approved via `/login?user_code=…`) yields the coarse
+  `id_token`, which then drives the SAME two-tier chain (app identity mints the
+  bearer → microservice verifies it). It also asserts the pre-approval
+  `authorization_pending` poll.
 - `e2e/verifydecide_test.go` proves the full **VERIFY→DECIDE** pipeline against a
   live dev authz service: a verified bearer is **denied** (empty grants), then
   the SAME call is **allowed** after a live grant flip, and a garbage bearer is

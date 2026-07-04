@@ -559,8 +559,13 @@ func (s *Storage) GetDeviceAuthorizationByUserCode(_ context.Context, userCode s
 	return e.state, nil
 }
 
-// CompleteDeviceAuthorization binds a chosen identity to a device flow
-// (passwordless). Left as a seam for a device login UI; unused by P0 tests.
+// CompleteDeviceAuthorization binds a chosen built-in identity to a device flow
+// (passwordless: no credential is checked). It is the storage side of the
+// /login?user_code=…&identity=… device-approval path (see login.go) and of the
+// op.DeviceAuthorizationStorage seam the token endpoint reads: once Done is set,
+// a CLI polling /oauth/token receives the id_token. It sets auth_time and a
+// "none" AMR so the device id_token matches the passwordless auth-code path, and
+// fails closed on an unknown identity or user code.
 func (s *Storage) CompleteDeviceAuthorization(_ context.Context, userCode, subject string) error {
 	if identityBySubject(subject) == nil {
 		return fmt.Errorf("unknown identity %q", subject)
@@ -572,6 +577,8 @@ func (s *Storage) CompleteDeviceAuthorization(_ context.Context, userCode, subje
 		return errors.New("user code not found")
 	}
 	e.state.Subject = subject
+	e.state.AuthTime = time.Now()
+	e.state.AMR = []string{"none"} // passwordless: no shared-secret factor presented
 	e.state.Done = true
 	return nil
 }

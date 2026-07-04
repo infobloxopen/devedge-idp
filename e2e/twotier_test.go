@@ -336,10 +336,11 @@ func driveLoginAsAlice(t *testing.T, base string, client *http.Client, authURL s
 // discovery is the subset of the OIDC discovery document the single-issuer test
 // needs.
 type discovery struct {
-	Issuer                string `json:"issuer"`
-	AuthorizationEndpoint string `json:"authorization_endpoint"`
-	TokenEndpoint         string `json:"token_endpoint"`
-	JwksURI               string `json:"jwks_uri"`
+	Issuer                      string `json:"issuer"`
+	AuthorizationEndpoint       string `json:"authorization_endpoint"`
+	TokenEndpoint               string `json:"token_endpoint"`
+	JwksURI                     string `json:"jwks_uri"`
+	DeviceAuthorizationEndpoint string `json:"device_authorization_endpoint"`
 }
 
 func fetchDiscovery(t *testing.T, base string) discovery {
