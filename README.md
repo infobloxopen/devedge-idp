@@ -69,7 +69,7 @@ Open `http://localhost:8080/` in a browser to see the launchpad.
 | `/launchpad.json` | the launchpad model (session, identities, tiles) as JSON |
 | `/ui/launchpad.js` | the launchpad frontend bundle (built on devedge-ufe-sdk) |
 | `/.well-known/openid-configuration` | OIDC discovery |
-| `/authorize` | authorization endpoint (auth-code + PKCE S256) |
+| `/authorize` | authorization endpoint (auth-code + PKCE S256; PKCE is mandatory for public clients) |
 | `/oauth/token` | token endpoint (auth-code + refresh + device grants) |
 | `/keys` | JWKS (id_token signing public keys) |
 | `/device_authorization` | device grant (RFC 8628) |
@@ -122,8 +122,9 @@ is a superset of JSON). Schema — a list of clients, each:
 | Key | Type | Meaning |
 |-----|------|---------|
 | `client_id` | string (required) | the OAuth2 client id (the app name); an empty id is rejected |
-| `client_secret` | string | the confidential-client secret (a guessable dev dummy) |
-| `redirect_uris` | list of string | allowed redirect URIs (the app's BFF callback) |
+| `client_secret` | string | the confidential-client secret (a guessable dev dummy); required unless `token_endpoint_auth_method` is `none`, and must be absent when it is |
+| `token_endpoint_auth_method` | string | `client_secret_basic` (the default when omitted, so existing files stay confidential) or `none` for a **public client** (RFC 8252 style: no secret, PKCE S256 mandatory) |
+| `redirect_uris` | list of string | allowed redirect URIs (the app's BFF callback). A public client may register `https://` URIs, loopback `http://127.0.0.1/…` / `http://localhost/…` (any port matches, RFC 8252 §7.3) or custom schemes |
 | `tile` | mapping | launchpad tile: `name`, `description`, `icon_url`, `launch_url` (all optional) |
 
 ```yaml
@@ -136,7 +137,23 @@ is a superset of JSON). Schema — a list of clients, each:
     description: ""
     icon_url: ""
     launch_url: https://orders.app.dev.test/
+- client_id: orders-cli
+  token_endpoint_auth_method: none   # public client: no secret, PKCE S256 mandatory
+  redirect_uris:
+    - http://127.0.0.1/callback      # loopback; the port is ignored (RFC 8252)
+  tile:
+    name: Orders CLI
 ```
+
+**Public clients.** A client with `token_endpoint_auth_method: none` holds no
+secret, so PKCE is what binds the authorization code to the caller: its
+`/authorize` request **must** carry `code_challenge` and
+`code_challenge_method=S256`, otherwise the OP answers `error=invalid_request`
+(relayed to the redirect URI, with the `state`). At `/oauth/token` it sends
+`client_id` in the form body instead of HTTP Basic, plus the `code_verifier`.
+Confidential clients are unchanged — PKCE stays optional for them — but a
+confidential client must have a non-empty `client_secret`: a secretless entry is
+rejected at load time, so a public client is always a declared one.
 
 The `tile` metadata drives the launchpad. Clients can also be registered
 programmatically via `Storage.RegisterClient` / `Storage.ReplaceFileClients`.
@@ -173,6 +190,12 @@ seeded client (`devedge-idp-example` / `dev-secret`, or any registered client):
    authenticating the confidential client with HTTP Basic
    (`client_id:client_secret`). The response's `id_token` is the coarse identity
    assertion.
+
+For a **public client** (`token_endpoint_auth_method: none`) the same four steps
+apply, except that step 1's PKCE parameters are mandatory — omit
+`code_challenge`, or use `plain`, and the OP redirects back with
+`error=invalid_request` — and step 4 authenticates nothing: send `client_id` in
+the form body instead of HTTP Basic.
 
 ```sh
 # The S256 challenge for a given verifier:
@@ -317,7 +340,10 @@ curl -X POST http://127.0.0.1:8090/v1/authorize \
 - `cmd/idp/acceptance_test.go` boots the IdP through the real
   `server.New(...).Serve` path and, with no browser, drives a full
   confidential-client **auth-code + PKCE** round-trip, then verifies the returned
-  `id_token` against the served JWKS and asserts the coarse-claims rule.
+  `id_token` against the served JWKS and asserts the coarse-claims rule. It also
+  proves the **public-client** contract (`token_endpoint_auth_method: none`):
+  `/authorize` without PKCE S256 is refused with `invalid_request`, and the PKCE
+  round-trip completes with no client authentication at the token endpoint.
 - `cmd/idp/launchpad_test.go` proves the **clients-file hot-reload** (boot with a
   clients file → its client/tile is registered; edit to add a second → it appears
   with no restart; a bad edit keeps last-good) and the **picker → launchpad →

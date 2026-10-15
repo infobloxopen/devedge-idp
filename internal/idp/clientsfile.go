@@ -15,6 +15,7 @@ import (
 // WRITES. The IdP READS exactly this shape. The file is YAML (friendlier to
 // hand-edit); a .json file with the same keys is also accepted (YAML ⊇ JSON).
 //
+//	# idp-clients.yaml
 //	- client_id: orders
 //	  client_secret: dev-secret-orders
 //	  redirect_uris: [https://orders.app.dev.test/callback]
@@ -23,19 +24,57 @@ import (
 //	    description: ""
 //	    icon_url: ""
 //	    launch_url: https://orders.app.dev.test/
+//	- client_id: orders-cli
+//	  token_endpoint_auth_method: none   # public client: no secret, PKCE S256 mandatory
+//	  redirect_uris: [http://127.0.0.1/callback]
+//	  tile:
+//	    name: Orders CLI
+//
+// token_endpoint_auth_method is the RFC 7591 registration key: "client_secret_basic"
+// (the default when omitted, keeping existing files confidential) or "none".
 type fileClient struct {
-	ClientID     string   `json:"client_id" yaml:"client_id"`
-	ClientSecret string   `json:"client_secret" yaml:"client_secret"`
-	RedirectURIs []string `json:"redirect_uris" yaml:"redirect_uris"`
-	Tile         Tile     `json:"tile" yaml:"tile"`
+	ClientID                string   `json:"client_id" yaml:"client_id"`
+	ClientSecret            string   `json:"client_secret" yaml:"client_secret"`
+	TokenEndpointAuthMethod string   `json:"token_endpoint_auth_method" yaml:"token_endpoint_auth_method"`
+	RedirectURIs            []string `json:"redirect_uris" yaml:"redirect_uris"`
+	Tile                    Tile     `json:"tile" yaml:"tile"`
+}
+
+// authMethodFromFile maps a file client's token_endpoint_auth_method (and
+// client_secret) to the OP auth method, rejecting contradictory combinations:
+//
+//   - "" or "client_secret_basic" → confidential (oidc.AuthMethodBasic); a
+//     client_secret is required, so a secretless client can no longer slip in as
+//     an un-PKCE'd confidential client by accident.
+//   - "none" → public (oidc.AuthMethodNone); a client_secret must NOT be set.
+//
+// Anything else is unsupported and rejected.
+func authMethodFromFile(fc fileClient) (oidc.AuthMethod, error) {
+	switch oidc.AuthMethod(fc.TokenEndpointAuthMethod) {
+	case "", oidc.AuthMethodBasic:
+		if fc.ClientSecret == "" {
+			return "", fmt.Errorf("confidential client has an empty client_secret; set one, or declare token_endpoint_auth_method: none for a public (PKCE) client")
+		}
+		return oidc.AuthMethodBasic, nil
+	case oidc.AuthMethodNone:
+		if fc.ClientSecret != "" {
+			return "", fmt.Errorf("token_endpoint_auth_method none (public client) must not have a client_secret")
+		}
+		return oidc.AuthMethodNone, nil
+	default:
+		return "", fmt.Errorf("unsupported token_endpoint_auth_method %q (supported: %s, %s)",
+			fc.TokenEndpointAuthMethod, oidc.AuthMethodBasic, oidc.AuthMethodNone)
+	}
 }
 
 // LoadClientsFile reads idp-clients.yaml (or a .json file with the same keys) and
-// builds the confidential clients it declares. Each file client is a dev fixture
-// that supports the same grants as the seeded example (auth-code + PKCE, refresh,
-// device) and authenticates with client_secret_basic. A client with an empty
-// client_id is rejected — a broken file must not silently register a nameless
-// client.
+// builds the clients it declares. Each file client is a dev fixture that supports
+// the same grants as the seeded example (auth-code + PKCE, refresh, device). It is
+// confidential (client_secret_basic, the default) or, with
+// token_endpoint_auth_method: none, public (no secret; PKCE S256 mandatory). A
+// client with an empty client_id, a confidential client with no secret, a public
+// client with a secret, or an unknown auth method is rejected — a broken file must
+// not silently register a nameless or an unintentionally secretless client.
 func LoadClientsFile(path string) ([]*Client, error) {
 	b, err := os.ReadFile(path)
 	if err != nil {
@@ -50,11 +89,15 @@ func LoadClientsFile(path string) ([]*Client, error) {
 		if fc.ClientID == "" {
 			return nil, fmt.Errorf("idp: clients file %q: entry %d has an empty client_id", path, i)
 		}
+		authMethod, err := authMethodFromFile(fc)
+		if err != nil {
+			return nil, fmt.Errorf("idp: clients file %q: entry %d (client_id %q): %w", path, i, fc.ClientID, err)
+		}
 		clients = append(clients, &Client{
 			id:           fc.ClientID,
 			secret:       fc.ClientSecret,
 			redirectURIs: fc.RedirectURIs,
-			authMethod:   oidc.AuthMethodBasic,
+			authMethod:   authMethod,
 			grantTypes: []oidc.GrantType{
 				oidc.GrantTypeCode,
 				oidc.GrantTypeRefreshToken,
