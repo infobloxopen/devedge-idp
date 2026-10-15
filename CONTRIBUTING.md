@@ -8,8 +8,8 @@ The dev-manipulable config files this app reads — `idp-clients.yaml` (the clie
 `de idp clients sync` writes) and `grants.yaml` (the `cmd/devauthz` grants) — use **snake_case**
 keys:
 
-- `idp-clients.yaml`: `client_id`, `client_secret`, `redirect_uris`, and a `tile` with
-  `name`/`description`/`icon_url`/`launch_url`.
+- `idp-clients.yaml`: `client_id`, `client_secret`, `token_endpoint_auth_method`, `redirect_uris`,
+  and a `tile` with `name`/`description`/`icon_url`/`launch_url`.
 - `grants.yaml`: `tenant`, `subjects`, `verbs`, `resource`.
 
 This matches the Go `json` struct tags and the OAuth2/OIDC spec (`client_id`, `redirect_uris` are

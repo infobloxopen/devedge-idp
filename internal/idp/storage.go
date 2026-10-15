@@ -42,10 +42,10 @@ type Storage struct {
 	// ReplaceFileClients preserves them so file-sourced clients only ever
 	// AUGMENT the seed — the seeded example client the acceptance tests rely on
 	// is never dropped by a clients-file edit.
-	seedIDs      map[string]struct{}
-	signingKey   signingKey
-	deviceCodes  map[string]*deviceEntry // deviceCode -> entry
-	userCodes    map[string]string       // userCode -> deviceCode
+	seedIDs     map[string]struct{}
+	signingKey  signingKey
+	deviceCodes map[string]*deviceEntry // deviceCode -> entry
+	userCodes   map[string]string       // userCode -> deviceCode
 }
 
 // Compile-time proof we satisfy the interfaces the OP needs.
@@ -84,7 +84,7 @@ func NewStorage(clients map[string]*Client) (*Storage, error) {
 	}, nil
 }
 
-// RegisterClient adds or replaces a confidential client at runtime. This is the
+// RegisterClient adds or replaces a client at runtime. This is the
 // seam the future `de idp clients sync` will call; it is intentionally exported
 // and unused by the P0 wiring.
 func (s *Storage) RegisterClient(c *Client) {
@@ -200,6 +200,11 @@ func (s *Storage) AuthorizeClientIDSecret(_ context.Context, clientID, clientSec
 	if !ok {
 		return fmt.Errorf("client %q not found", clientID)
 	}
+	// A public client has no secret, so no presented secret — not even an empty
+	// one — can authenticate it. Fail closed rather than compare against "".
+	if c.IsPublic() {
+		return fmt.Errorf("client %q is public (token_endpoint_auth_method none) and has no secret", clientID)
+	}
 	// Dev-only: constant-time comparison against a stored plaintext secret. A
 	// real IdP stores (and compares against) a hash, not a plaintext value.
 	if subtle.ConstantTimeCompare([]byte(c.secret), []byte(clientSecret)) != 1 {
@@ -210,17 +215,51 @@ func (s *Storage) AuthorizeClientIDSecret(_ context.Context, clientID, clientSec
 
 // --- auth requests ---------------------------------------------------------
 
+// CreateAuthRequest stores an in-flight /authorize request. Besides the OP's own
+// validation (client, redirect_uri, scopes, response_type — already done by the
+// time this runs) it enforces the public-client PKCE rule: a client registered
+// with token_endpoint_auth_method "none" MUST send code_challenge with
+// code_challenge_method=S256 (RFC 7636), otherwise the request is rejected with
+// invalid_request. The OP alone would only check PKCE at the token endpoint IF
+// a challenge was recorded, so this is the point that makes PKCE mandatory.
+// Confidential clients keep today's behaviour: PKCE is optional.
 func (s *Storage) CreateAuthRequest(_ context.Context, ar *oidc.AuthRequest, userID string) (op.AuthRequest, error) {
 	if len(ar.Prompt) == 1 && ar.Prompt[0] == "none" {
 		// prompt=none can't complete without a session; fail per spec.
 		return nil, oidc.ErrLoginRequired()
 	}
-	req := authRequestFromOIDC(ar, userID)
-	req.id = uuid.NewString()
 	s.lock.Lock()
 	defer s.lock.Unlock()
+	c, ok := s.clients[ar.ClientID]
+	if !ok {
+		return nil, fmt.Errorf("client %q not found", ar.ClientID)
+	}
+	if err := requirePKCES256(c, ar); err != nil {
+		return nil, err
+	}
+	req := authRequestFromOIDC(ar, userID)
+	req.id = uuid.NewString()
 	s.authRequests[req.id] = req
 	return req, nil
+}
+
+// requirePKCES256 is the public-client PKCE gate for /authorize: a public client
+// must present a code_challenge with code_challenge_method=S256. It returns an
+// oidc invalid_request error (which the OP relays to the client's redirect_uri
+// as error=invalid_request) or nil. Confidential clients always pass.
+func requirePKCES256(c *Client, ar *oidc.AuthRequest) error {
+	if !c.IsPublic() {
+		return nil
+	}
+	if ar.CodeChallenge == "" {
+		return oidc.ErrInvalidRequest().WithDescription(
+			"public client %q requires PKCE: code_challenge (with code_challenge_method=S256) is missing", c.id)
+	}
+	if ar.CodeChallengeMethod != oidc.CodeChallengeMethodS256 {
+		return oidc.ErrInvalidRequest().WithDescription(
+			"public client %q requires PKCE S256: code_challenge_method must be S256, got %q", c.id, string(ar.CodeChallengeMethod))
+	}
+	return nil
 }
 
 func (s *Storage) AuthRequestByID(_ context.Context, id string) (op.AuthRequest, error) {

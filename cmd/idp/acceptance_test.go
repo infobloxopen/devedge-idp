@@ -9,6 +9,8 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -27,11 +29,54 @@ const (
 
 // discovery is the subset of the OIDC discovery document we assert on.
 type discovery struct {
-	Issuer                      string `json:"issuer"`
-	AuthorizationEndpoint       string `json:"authorization_endpoint"`
-	TokenEndpoint               string `json:"token_endpoint"`
-	JwksURI                     string `json:"jwks_uri"`
-	DeviceAuthorizationEndpoint string `json:"device_authorization_endpoint"`
+	Issuer                            string   `json:"issuer"`
+	AuthorizationEndpoint             string   `json:"authorization_endpoint"`
+	TokenEndpoint                     string   `json:"token_endpoint"`
+	JwksURI                           string   `json:"jwks_uri"`
+	DeviceAuthorizationEndpoint       string   `json:"device_authorization_endpoint"`
+	TokenEndpointAuthMethodsSupported []string `json:"token_endpoint_auth_methods_supported"`
+}
+
+// getDiscovery fetches and decodes the OIDC discovery document.
+func getDiscovery(t *testing.T, base string) discovery {
+	t.Helper()
+	resp, err := http.Get(base + "/.well-known/openid-configuration")
+	if err != nil {
+		t.Fatalf("discovery GET: %v", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("discovery status %d: %s", resp.StatusCode, body)
+	}
+	var disc discovery
+	if err := json.Unmarshal(body, &disc); err != nil {
+		t.Fatalf("discovery decode: %v (%s)", err, body)
+	}
+	return disc
+}
+
+// pkceS256 returns a fresh PKCE code_verifier and its S256 code_challenge.
+func pkceS256(t *testing.T) (verifier, challenge string) {
+	t.Helper()
+	verifier = randString(t, 32)
+	sum := sha256.Sum256([]byte(verifier))
+	return verifier, base64.RawURLEncoding.EncodeToString(sum[:])
+}
+
+// postToken POSTs a form to the token endpoint (no client authentication unless
+// the caller set it on the form) and returns the status and body.
+func postToken(t *testing.T, tokenEndpoint string, form url.Values) (int, []byte) {
+	t.Helper()
+	req, _ := http.NewRequest(http.MethodPost, tokenEndpoint, strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("token POST: %v", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	return resp.StatusCode, body
 }
 
 // startIDP boots the IdP through the exact server.New(...).Serve(ctx) path the
@@ -241,6 +286,161 @@ func TestAcceptance_AuthCodePKCE(t *testing.T) {
 		if _, present := claims[forbidden]; present {
 			t.Errorf("id_token must NOT carry %q (downstream app-identity claim), got %v", forbidden, claims[forbidden])
 		}
+	}
+}
+
+// TestAcceptance_PublicClientPKCE is the public-client acceptance criterion. A
+// client declared in the clients file with token_endpoint_auth_method: none
+// (RFC 8252 style — no secret) (a) is refused at /authorize unless it sends
+// PKCE S256: the OP relays error=invalid_request to its redirect_uri; (b)
+// completes the auth-code + PKCE S256 round-trip with NO client authentication
+// at the token endpoint and receives a JWKS-verifiable id_token for itself; (c)
+// cannot redeem the code without the code_verifier; while (d) a confidential
+// client in the same file keeps today's behaviour (PKCE optional). The public
+// client registers a portless loopback redirect_uri and the request uses an
+// ephemeral port, the RFC 8252 §7.3 CLI pattern.
+func TestAcceptance_PublicClientPKCE(t *testing.T) {
+	const (
+		publicClientID       = "orders-cli"
+		publicRedirectURI    = "http://127.0.0.1:38081/callback" // registered as http://127.0.0.1/callback
+		confidentialClientID = "orders"
+		confidentialRedirect = "https://orders.app.dev.test/callback"
+	)
+	path := filepath.Join(t.TempDir(), "idp-clients.yaml")
+	writeClientsFile(t, path, `
+- client_id: orders-cli
+  token_endpoint_auth_method: none
+  redirect_uris:
+    - http://127.0.0.1/callback
+  tile:
+    name: Orders CLI
+- client_id: orders
+  client_secret: dev-secret-orders
+  redirect_uris:
+    - https://orders.app.dev.test/callback
+  tile:
+    name: Orders
+`)
+	base := startIDPWithClients(t, path, 50*time.Millisecond)
+	client := noRedirectClient()
+	disc := getDiscovery(t, base)
+	if !slices.Contains(disc.TokenEndpointAuthMethodsSupported, "none") {
+		t.Errorf("discovery token_endpoint_auth_methods_supported = %v, want it to include \"none\"", disc.TokenEndpointAuthMethodsSupported)
+	}
+
+	authorizeURL := func(clientID, redirectURI, state string, pkce url.Values) string {
+		q := url.Values{
+			"response_type": {"code"},
+			"client_id":     {clientID},
+			"redirect_uri":  {redirectURI},
+			"scope":         {"openid profile email"},
+			"state":         {state},
+		}
+		for k, v := range pkce {
+			q[k] = v
+		}
+		return disc.AuthorizationEndpoint + "?" + q.Encode()
+	}
+
+	// (a) Without PKCE S256 the public client is refused with invalid_request,
+	// delivered to its redirect_uri with the state echoed back.
+	_, someChallenge := pkceS256(t)
+	for _, tc := range []struct {
+		name string
+		pkce url.Values
+	}{
+		{"no PKCE", url.Values{}},
+		{"plain method", url.Values{"code_challenge": {someChallenge}, "code_challenge_method": {"plain"}}},
+		{"S256 method without a challenge", url.Values{"code_challenge_method": {"S256"}}},
+	} {
+		state := randString(t, 8)
+		loc := getRedirect(t, client, authorizeURL(publicClientID, publicRedirectURI, state, tc.pkce))
+		if loc.Host != "127.0.0.1:38081" || loc.Path != "/callback" {
+			t.Fatalf("%s: redirected to %s, want the client's redirect_uri", tc.name, loc)
+		}
+		if got := loc.Query().Get("error"); got != "invalid_request" {
+			t.Errorf("%s: error = %q, want \"invalid_request\" (%s)", tc.name, got, loc)
+		}
+		if got := loc.Query().Get("state"); got != state {
+			t.Errorf("%s: state = %q, want %q", tc.name, got, state)
+		}
+		if loc.Query().Get("code") != "" {
+			t.Errorf("%s: a code was issued without PKCE S256: %s", tc.name, loc)
+		}
+	}
+
+	// (b) With PKCE S256 the public client completes the flow: /authorize →
+	// /login (headless pick) → callback → code → token exchange with client_id
+	// in the form and NO Basic auth.
+	authorizeAndLogin := func(challenge string) (code string) {
+		t.Helper()
+		state := randString(t, 8)
+		loginLoc := getRedirect(t, client, authorizeURL(publicClientID, publicRedirectURI, state, url.Values{
+			"code_challenge":        {challenge},
+			"code_challenge_method": {"S256"},
+		}))
+		authRequestID := loginLoc.Query().Get("authRequestID")
+		if !strings.HasSuffix(loginLoc.Path, "/login") || authRequestID == "" {
+			t.Fatalf("public client with PKCE S256 did not reach /login: %s", loginLoc)
+		}
+		callbackLoc := getRedirect(t, client, base+"/login?"+url.Values{"authRequestID": {authRequestID}, "identity": {"alice"}}.Encode())
+		codeLoc := getRedirect(t, client, callbackLoc.String())
+		if got := codeLoc.Query().Get("state"); got != state {
+			t.Fatalf("state mismatch: got %q want %q", got, state)
+		}
+		if code = codeLoc.Query().Get("code"); code == "" {
+			t.Fatalf("no code in redirect: %s", codeLoc)
+		}
+		return code
+	}
+
+	verifier, challenge := pkceS256(t)
+	code := authorizeAndLogin(challenge)
+	status, tokBody := postToken(t, disc.TokenEndpoint, url.Values{
+		"grant_type":    {"authorization_code"},
+		"client_id":     {publicClientID},
+		"code":          {code},
+		"redirect_uri":  {publicRedirectURI},
+		"code_verifier": {verifier},
+	})
+	if status != http.StatusOK {
+		t.Fatalf("public client token exchange status %d: %s", status, tokBody)
+	}
+	var tok struct {
+		IDToken string `json:"id_token"`
+	}
+	if err := json.Unmarshal(tokBody, &tok); err != nil || tok.IDToken == "" {
+		t.Fatalf("token decode: %v (%s)", err, tokBody)
+	}
+	claims := verifyIDToken(t, disc.JwksURI, tok.IDToken)
+	if !audienceContains(claims["aud"], publicClientID) {
+		t.Errorf("aud = %v, want to contain %q", claims["aud"], publicClientID)
+	}
+	if claims["sub"] != "alice" {
+		t.Errorf("sub = %v, want \"alice\"", claims["sub"])
+	}
+	if apps, _ := claims["apps"].([]any); !slices.Contains(apps, any(publicClientID)) {
+		t.Errorf("apps = %v, want to contain %q (dev identities are entitled to every registered client)", claims["apps"], publicClientID)
+	}
+
+	// (c) The code cannot be redeemed without the code_verifier.
+	_, challenge2 := pkceS256(t)
+	code2 := authorizeAndLogin(challenge2)
+	status, body := postToken(t, disc.TokenEndpoint, url.Values{
+		"grant_type":   {"authorization_code"},
+		"client_id":    {publicClientID},
+		"code":         {code2},
+		"redirect_uri": {publicRedirectURI},
+	})
+	if status != http.StatusBadRequest || !strings.Contains(string(body), `"invalid_request"`) {
+		t.Errorf("token exchange without code_verifier: status %d body %s, want 400 invalid_request", status, body)
+	}
+
+	// (d) The confidential client in the same file is unchanged: no PKCE still
+	// reaches /login.
+	loginLoc := getRedirect(t, client, authorizeURL(confidentialClientID, confidentialRedirect, "xyz", nil))
+	if !strings.HasSuffix(loginLoc.Path, "/login") || loginLoc.Query().Get("authRequestID") == "" {
+		t.Fatalf("confidential client without PKCE did not reach /login (regression): %s", loginLoc)
 	}
 }
 

@@ -23,9 +23,11 @@ type Tile struct {
 	LaunchURL   string `json:"launch_url" yaml:"launch_url"`
 }
 
-// Client is the storage model of a confidential OAuth2 client — an "app
-// identity" in the WS-026 model. For P0 these are dev fixtures with guessable
-// secrets; that is intended (dev-only). It implements op.Client.
+// Client is the storage model of an OAuth2 client — an "app identity" in the
+// WS-026 model. A client is either confidential (client_secret_basic, a
+// guessable dev secret — intended, dev-only) or public (token_endpoint_auth_method
+// "none", RFC 8252 style: no secret, PKCE S256 mandatory). It implements
+// op.Client.
 type Client struct {
 	id           string
 	secret       string
@@ -49,11 +51,25 @@ func (c *Client) RedirectURIs() []string { return c.redirectURIs }
 // PostLogoutRedirectURIs returns registered post-logout redirects (none in dev).
 func (c *Client) PostLogoutRedirectURIs() []string { return []string{} }
 
-// ApplicationType reports the client as a confidential web app.
-func (c *Client) ApplicationType() op.ApplicationType { return op.ApplicationTypeWeb }
+// ApplicationType reports a confidential client as a web app and a public
+// client as a native app (RFC 8252). The OP keys two things off this: a native
+// client's redirect_uris may be loopback (http://127.0.0.1/… or
+// http://localhost/…, any port) or custom-scheme as well as https, and the OP
+// does not demand client authentication from it at the device-token endpoint.
+func (c *Client) ApplicationType() op.ApplicationType {
+	if c.IsPublic() {
+		return op.ApplicationTypeNative
+	}
+	return op.ApplicationTypeWeb
+}
 
 // AuthMethod is how the client authenticates at the token endpoint.
 func (c *Client) AuthMethod() oidc.AuthMethod { return c.authMethod }
+
+// IsPublic reports whether the client is a public client (token_endpoint_auth_method
+// "none"): it holds no secret and MUST use PKCE S256 (enforced at /authorize by
+// Storage.CreateAuthRequest, and at /oauth/token by the OP).
+func (c *Client) IsPublic() bool { return c.authMethod == oidc.AuthMethodNone }
 
 // ResponseTypes are the allowed authorization response types (code flow only).
 func (c *Client) ResponseTypes() []oidc.ResponseType {
